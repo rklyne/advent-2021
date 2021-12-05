@@ -1,0 +1,28 @@
+{
+  "clearMocks": true,
+  "collectCoverageFrom": ["**/*.{js,jsx,ts}"],
+  "coveragePathIgnorePatterns": [
+    "/src/index.ts",
+    "/node_modules/",
+    "/coverage/",
+    "/test/",
+    "/scripts/",
+    ".build/",
+    ".esbuild/"
+  ],
+  "moduleDirectories": ["node_modules", "libs", "lambdas", "tests"],
+  "moduleFileExtensions": ["js", "ts"],
+  "modulePaths": ["libs", "lambdas"],
+  "restoreMocks": true,
+  "testEnvironment": "node",
+  "testRegex": "\\.spec\\.ts$",
+  "transform": {
+    "^.+\\.ts$": "ts-jest"
+  },
+  "globals": {
+    "ts-jest": { "tsconfig": "tsconfig.json" }
+  },
+  "moduleNameMapper": {
+    "~(.*)$": ["<rootDir>/src$1"]
+  }
+}
