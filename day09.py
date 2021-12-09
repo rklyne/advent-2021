@@ -108,6 +108,14 @@ inputMap = """
 3456789967898789965498966534134689545965432345678929854345678989765421245679544856789976439876323478
 4567999878999999876987654321012789659878543656789219765656789999876532476789667767899876545987454567"""
 
+def adjacentCoords(x, y):
+    return[
+            [x+1, y],
+            [x-1, y],
+            [x, y+1],
+            [x, y-1],
+            ]
+
 def adjacentPoints(x, y, data):
     return[
             data[y][x+1],
@@ -129,8 +137,30 @@ def part1():
                 total += here + 1
     return total
 
-def part2():
-    pass
+def find_basin(x, y, data, exclude=None):
+    exclude = exclude or set([])
+    if (x, y) in exclude:
+        return exclude
+    here = data[y][x]
+    if here < 9:
+        exclude.add((x, y))
+        for [x1, y1] in adjacentCoords(x, y):
+            find_basin(x1, y1, data, exclude)
+    return exclude
+
+def part2(inputMap=inputMap):
+    rows = makeMap(inputMap)
+    basins = []
+    basin_points = set()
+    for y in range(1, len(rows)-1):
+        for x in range(1, len(rows[0])-1):
+            if (x,y) in basin_points: continue
+            basin = find_basin(x, y, rows)
+            if basin:
+                basins.append(basin)
+                basin_points.update(basin)
+    bySize = list(reversed(sorted([(len(x), x) for x in basins])))
+    return [size for (size, basin) in bySize[:3]]
 
 print(part1())
 print(part2())
