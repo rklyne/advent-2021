@@ -2,3 +2,4 @@
 node_modules
 */target/classes/*
 */target/stale/*
+__pycache__/
