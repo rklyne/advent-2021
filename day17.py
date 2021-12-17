@@ -89,7 +89,7 @@ def findTrajectory(target: Box, debug=lambda msg: None):
     xSpeedMin = min(qf(target[0][0]), target[0][0])
     xSpeedMax = max(qf(target[1][0]), target[1][0] + 1)
     yMin = (target[1][1] - 1)
-    yMax = 800
+    yMax = 180
     print(f" ** range X = ({xSpeedMin} ... {xSpeedMax})")
     print(f" ** range Y = ({yMin} ... {yMax})")
     for xSpeed in range(math.floor(xSpeedMin) - 1, math.floor(xSpeedMax) + 2):
