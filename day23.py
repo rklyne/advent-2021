@@ -5,7 +5,6 @@ import attr
 import heapq
 from functools import lru_cache
 
-
 Pod = Literal['A', 'B', 'C' , 'D', '-']
 A: Pod = 'A'
 B: Pod = 'B'
@@ -29,39 +28,39 @@ Cell = str
 InitState = List[List[Pod]]
 
 Move = Tuple[Cell, Cell]
+Path = List[Cell]
 Moves = List[Move]
 
 def moveCost(src: Cell, dst: Cell) -> int:
     return len(movePath(src, dst))
 
-def podCost(pod: Pod):
-    if pod == NOPOD:
-        raise RuntimeError("Cannot cost when no amphipod is present")
-    return {
-        'A': 1,
-        'B': 10,
-        'C': 100,
-        'D': 1000,
-    }[pod]
+POD_COSTS: Dict[Pod, int] = {
+    'A': 1,
+    'B': 10,
+    'C': 100,
+    'D': 1000,
+}
 
 topRow: List[Cell] = ['L2', 'L1', 'T1', 'I1', 'T2', 'I2', 'T3', 'I3', 'T4', 'R1', 'R2']
+topRowSet = set(topRow)
 
-def allCells(cols: int) -> List[Cell]:
+@lru_cache
+def allCells(pods: int) -> List[Cell]:
     return [  # type:ignore
         'L1', 'L2', 'R1', 'R2',
         'I1', 'I2', 'I3',
     ] + [
         f'{c}{n}'
         for c in 'ABCD'
-        for n in range(1, cols + 1)
+        for n in range(1, pods + 1)
     ]
 
 @lru_cache(1000000)
-def movePath(src: Cell, dst: Cell, rec=True) -> List[Cell]:
+def movePath(src: Cell, dst: Cell, rec=True) -> Path:
     columns = ['A', 'B', 'C', 'D']
     if src == dst:
         return []
-    if src in topRow and dst in topRow:
+    if src in topRowSet and dst in topRowSet:
         idx1 = topRow.index(src)
         idx2 = topRow.index(dst)
         if idx1 < idx2:
@@ -84,46 +83,181 @@ def movePath(src: Cell, dst: Cell, rec=True) -> List[Cell]:
 
 StateLocations = Dict[Cell, Pod]
 PodLocations = Dict[Pod, List[Cell]]
-# State = Tuple[StateLocations, int, PodLocations]
+
+@lru_cache(1000000)
+def computeOccupantGuess(occupant, locations):
+    outOfPlace = [l for l in locations
+            if l[0] != occupant]
+    return sum([moveCost(location, f'{occupant}{idx}') * POD_COSTS[occupant]
+
+        for idx, location in enumerate(outOfPlace)])
+
+def computeGuess(podLocations: PodLocations) -> int:
+    return sum([computeOccupantGuess(occupant, tuple(locations))
+        for occupant, locations in podLocations.items()
+    ])
 
 @attr.s(hash=True)
-class State(object):
+class State1(object):
     locations: StateLocations = attr.ib(eq=False)
-    hash: int = attr.ib(eq=True)
-    podLocations: PodLocations = attr.ib(eq=False)
+    hash: int = attr.ib(eq=True, default=None)
+    podLocations: PodLocations = attr.ib(eq=False, default=None)
 
     def __attrs_post_init__(self):
-        podLocations: PodLocations = self.podLocations
-        guesses = [moveCost(location, f'{occupant}{idx}') * podCost(occupant)
-                for occupant, locations in podLocations.items()
-                for idx, location in enumerate([l for l in locations
-                    if l[0] != occupant])]
-                # raise RuntimeError(podLocations, guesses)
-        self.guessCost = sum(guesses)
+        # self._store = [self.locations.get(cell, NOPOD) for cell in allCells(self.pods)]
+        self._computePodLocations()
+        self._computeHash()
+        self._computeGuessCost()
 
-def stateFromLocations(newState: StateLocations) -> State:
-    return State(newState, stateHash(newState), locationsByPod(newState))
+    def _computeHash(self):
+        self.hash = hash(tuple(sorted(self.locations.items())))
 
-def newBlankState(cols: int) -> State:
-    return stateFromLocations({
-        c: NOPOD for c in allCells(cols)
-    })
+    def _computePodLocations(self):
+        self.podLocations = locationsByPod(self.locations)
+
+    def _computeGuessCost(self):
+        self.guessCost = computeGuess(self.podLocations)
+
+    def move(self, move: Move):
+        newLocations = self.locations.copy()
+        src = move[0]
+        dst = move[1]
+        del newLocations[src]
+        newLocations[dst] = self.locations[src]
+        return State1(newLocations)
+
+    def getPodAt(self, cell: Cell):
+        return self.locations[cell]
+
+    @classmethod
+    def fromLocations(cls, init: InitState):
+        newState = newBlankState(len(init[0]))
+        locations = newState.locations.copy()
+        for col, pods in zip('ABCD', init):
+            for i, value in enumerate(pods, 1):
+                locations[f'{col}{i}'] = value # type:ignore
+        return cls(locations)
+
+    def isEndState(self, pods: int):
+        for col in 'ABCD':
+            for i in range(1, pods+1):
+                if self.locations.get(f'{col}{i}', NOPOD) != col:
+                    return False
+        return True
+
+    def legalMoves(self, pods: int):
+        moves: Moves = []
+        for (src, dst), path in allLegalMoves(pods):
+            srcPod = self.locations.get(src, NOPOD)
+            if srcPod == NOPOD:
+                continue
+            if dst[0] in 'ABCD' and dst[0] != srcPod:
+                continue
+            if all((self.locations.get(cell, NOPOD) == NOPOD) for cell in path):
+                moves.append((src, dst))
+        return moves
+
+@lru_cache(100)
+def endStateStore(pods: int):
+    return tuple([cell[0] if cell[0] in 'ABCD' else NOPOD for cell in allCells(pods)])
+
+@lru_cache(200000)
+def forbiddenSet(pods, store):
+    return {k for (k, v) in zip(allCells(pods), store) if v != NOPOD}
+
+@lru_cache(1000000)
+def locationMap(pods: int, store):
+    return {k: v for (k, v) in zip(allCells(pods), store)}
+
+@attr.s(hash=True)
+class State2(object):
+    pods: int = attr.ib(eq=True)
+    _store = attr.ib(eq=True)
+    locations: StateLocations = attr.ib(eq=False, default=None)
+    hash: int = attr.ib(eq=True, default=None)
+
+    def __attrs_post_init__(self):
+        # self.locations = {k: v for (k, v) in zip(allCells(self.pods), self._store)}
+
+        self._computeHash()
+        self.guessCost = State2._computeGuessCost(self.pods, self._store)
+
+    def _computeHash(self):
+        self.hash = hash(self._store)
+
+    @staticmethod
+    @lru_cache(100000)
+    def _computeGuessCost(pods, store):
+        podCount = {}
+        guess = 0
+        for cell, pod in zip(allCells(pods), store):
+            if pod == NOPOD:
+                continue
+            if cell[0] != pod:
+                podCount.setdefault(pod, 0)
+                podCount[pod] += 1
+                guess += POD_COSTS[pod] * moveCost(cell, pod + '1')
+
+        for v in podCount.values():
+            # compensate for using '1' above
+            guess += ((v-1) * v ) // 2
+        return guess
+
+    def move(self, move: Move) -> 'State2':
+        newLocations = list(self._store)
+        allMoves = allCells(self.pods)
+        src = allMoves.index(move[0])
+        dst = allMoves.index(move[1])
+        newLocations[dst] = self._store[src]
+        newLocations[src] = NOPOD
+        return State2(self.pods, tuple(newLocations))
+
+    def getPodAt(self, cell: Cell) -> Pod:
+        if cell[0] == 'T': return NOPOD
+        return self._store[allCells(self.pods).index(cell)]
+
+    @classmethod
+    def fromLocations(cls, init: InitState):
+        pods = len(init[0])
+        locations = {}
+        for pod, initPods in zip('ABCD', init):
+            for i, value in enumerate(initPods, 1):
+                locations[f'{pod}{i}'] = value # type:ignore
+        store = tuple(locations.get(cell, NOPOD) for cell in allCells(pods))
+        return cls(pods, store)
+
+    def isEndState(self, pods: int):
+        return self._store == endStateStore(self.pods)
+
+    def legalMoves(self, pods: int):
+        forbidden = forbiddenSet(self.pods, self._store)
+        locations = locationMap(self.pods, self._store)
+        moves: Moves = []
+        for (src, dst), path in allLegalMoves(self.pods):
+            srcPod = locations[src]
+            if srcPod == NOPOD:
+                continue
+            if dst[0] != srcPod:
+                if src in topRowSet:
+                    continue
+                if dst[0] in 'ABCD':
+                    continue
+            if all(cell not in forbidden for cell in path):
+                moves.append((src, dst))
+        return moves
+
+
+State = State2
+
+def newBlankState(pods: int) -> State:
+    return makeState([[NOPOD]*pods]*4)
 
 def makeState(init: InitState) -> State:
-    newState: State = newBlankState(len(init[0]))
-    locations = newState.locations.copy()
-    for col, pods in zip('ABCD', init):
-        for i, value in enumerate(pods, 1):
-            locations[f'{col}{i}'] = value # type:ignore
-    return stateFromLocations(locations)
+    return State.fromLocations(init)
 
 @lru_cache(10000)
-def isEndState(state: State, cols: int):
-    for col in 'ABCD':
-        for i in range(1, cols+1):
-            if state.locations[f'{col}{i}'] != col:
-                return False
-    return True
+def isEndState(state: State, pods: int):
+    return state.isEndState(pods)
 
 @attr.s
 class Game(object):
@@ -156,46 +290,28 @@ myInput: InitState= [[D, C], [B, C], [B, D], [A, A]]
 
 myInput2: InitState = extendInput(myInput)
 
-def stateHash(state: StateLocations) -> int:
-    return hash(tuple(sorted(state.items())))
-
 def makeMove(state: State, move: Move) -> State:
-    newState = state.locations.copy()
-    src = move[0]
-    dst = move[1]
-    newState[src] = NOPOD
-    newState[dst] = state.locations[src]
-    return stateFromLocations(newState)
+    return state.move(move)
 
 @lru_cache()
-def allLegalMoves(cols: int) -> Moves:
+def allLegalMoves(pods: int) -> List[Tuple[Move, Path]]:
     moves: Moves = []
-    for src in allCells(cols):
-        for dst in allCells(cols):
-            if dst == src:
+    for src in allCells(pods):
+        for dst in allCells(pods):
+            if dst[0] == src[0]:
                 continue
-            if src in topRow and dst in topRow:
+            if src in topRowSet and dst in topRowSet:
                 # Amphipods will not move from hallway to hallway
                 continue
-            path = movePath(src, dst)
+            path: Path = movePath(src, dst)
             assert dst in path, (src, dst, path)
             move: Move = (src, dst)
-            moves.append(move)
+            moves.append((move, path))
+    print(f"legal moves@{pods} == {len(moves)}")
     return moves
 
-@lru_cache(20000)
-def legalMoves(state: State, cols: int) -> Moves:
-    moves: Moves = []
-    for src, dst in allLegalMoves(cols):
-        srcPod = state.locations[src]
-        if srcPod == NOPOD:
-            continue
-        if dst[0] in 'ABCD' and dst[0] != srcPod:
-            continue
-        path = movePath(src, dst)
-        if all(('T' in cell or state.locations[cell] == NOPOD) for cell in path):
-            moves.append((src, dst))
-    return moves
+def legalMoves(state: State, pods: int) -> Moves:
+    return state.legalMoves(pods)
 
 Heap = List[Tuple[int, int, Moves, State]]
 def pruneHeap(heap: Heap) -> Heap:
@@ -220,26 +336,32 @@ def guessStateCost(state: State) -> int:
 
 def findFastestWin(init: InitState, debugStep=10000) -> Tuple[int, Moves]:
     state = makeState(init)
-    cols: int = len(init[0])
+    pods: int = len(init[0])
     visited: Dict[State, int] = {state: 0}
     seqs: Heap = []
-    heapq.heappush(seqs, (guessStateCost(state), 0, [], state)) # type: ignore
-    print(f"COLS: {cols}")
+    heapq.heappush(seqs, (state.guessCost, 0, [], state)) # type: ignore
+    print(f"PODS: {pods}")
 
     steps = 0
-    while seqs and not isEndState(seqs[0][3], cols):
+    while seqs and not isEndState(seqs[0][3], pods):
+        if steps % 200000 == 0:
+            seqs = pruneHeap(seqs)
         guessCost, cost, moves, state = heapq.heappop(seqs)
+        if len(moves) == (state.pods * 4 * 2):
+            continue
         if visited.get(state, 0) < cost:
             continue
         if steps % debugStep == 0:
             print(f" >> {steps} ({len(seqs)}) >> cost {cost}/{guessCost}")
         steps += 1
-        for move in legalMoves(state, cols):
-            podType = state.locations[move[0]]
+        for move in legalMoves(state, pods):
+            podType = state.getPodAt(move[0])
             newState: State = makeMove(state, move)
             newMoves = moves + [move]
-            newCost = cost + (podCost(podType) * moveCost(*move))
-            newGuess = guessStateCost(newState)
+            newCost = cost + (POD_COSTS[podType] * moveCost(*move))
+            newGuess = newState.guessCost
+            if newGuess > 47000:
+                continue
             prevCost = visited.get(newState, None)
             if prevCost and prevCost <= newCost:
                 continue
@@ -303,6 +425,7 @@ class TestMoveCost(unittest.TestCase):
         self.assertEqual(['L1'], movePath('T1', 'L1'))
 
 if __name__ == '__main__':
+    allLegalMoves(4)
     print(findFastestWin(myInput))
     print(myInput2)
     # print(findFastestWin(myInput2))
